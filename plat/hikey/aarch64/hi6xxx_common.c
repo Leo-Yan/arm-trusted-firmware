@@ -1,0 +1,237 @@
+/*
+ * Copyright (c) 2013-2014, ARM Limited and Contributors. All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * Neither the name of ARM nor the names of its contributors may be used
+ * to endorse or promote products derived from this software without specific
+ * prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
+#include <arch.h>
+#include <arch_helpers.h>
+#include <arm_gic.h>
+#include <assert.h>
+#include <bl_common.h>
+#include <cci400.h>
+#include <debug.h>
+#include <mmio.h>
+#include <platform.h>
+#include <plat_config.h>
+#include <xlat_tables.h>
+#include "../hisi_def.h"
+
+plat_config_t plat_config;
+
+/*
+ * Table of regions to map using the MMU.
+ * This doesn't include TZRAM as the 'mem_layout' argument passed to
+ * configure_mmu_elx() will give the available subset of that,
+ */
+const mmap_region_t hi6xxx_mmap[] = {
+	{ TZROM_BASE,	TZROM_BASE,	TZROM_SIZE,
+						MT_MEMORY | MT_RO | MT_SECURE },
+	{ TZDRAM_BASE,	TZDRAM_BASE,	TZDRAM_SIZE,
+						MT_MEMORY | MT_RW | MT_SECURE },
+	{ FLASH0_BASE,	FLASH0_BASE,	FLASH0_SIZE,
+						MT_MEMORY | MT_RO | MT_SECURE },
+	{ FLASH1_BASE,	FLASH1_BASE,	FLASH1_SIZE,
+						MT_MEMORY | MT_RO | MT_SECURE },
+	{ VRAM_BASE,	VRAM_BASE,	VRAM_SIZE,
+						MT_MEMORY | MT_RW | MT_SECURE },
+	{ DEVICE0_BASE,	DEVICE0_BASE,	DEVICE0_SIZE,
+						MT_DEVICE | MT_RW | MT_SECURE },
+	{ DEVICE1_BASE,	DEVICE1_BASE,	DEVICE1_SIZE,
+						MT_DEVICE | MT_RW | MT_SECURE },
+	/* 2nd GB as device for now...*/
+	{ 0x40000000,	0x40000000,	0x40000000,
+						MT_DEVICE | MT_RW | MT_SECURE },
+	{ DRAM1_BASE,	DRAM1_BASE,	DRAM1_SIZE,
+						MT_MEMORY | MT_RW | MT_NS },
+	{0}
+};
+
+/* Array of secure interrupts to be configured by the gic driver */
+const unsigned int irq_sec_array[] = {
+    IRQ_SEC_SGI_0,
+	IRQ_SEC_SGI_1,
+	IRQ_SEC_SGI_2,
+	IRQ_SEC_SGI_3,
+	IRQ_SEC_SGI_4,
+	IRQ_SEC_SGI_5,
+	IRQ_SEC_SGI_6,
+	IRQ_SEC_SGI_7,
+};
+
+
+const unsigned int num_sec_irqs = sizeof(irq_sec_array) /
+	sizeof(irq_sec_array[0]);
+
+/*******************************************************************************
+ * Macro generating the code for the function setting up the pagetables as per
+ * the platform memory map & initialize the mmu, for the given exception level
+ ******************************************************************************/
+#define DEFINE_CONFIGURE_MMU_EL(_el)					\
+	void hi6xxx_configure_mmu_el##_el(unsigned long total_base,	\
+				   unsigned long total_size,		\
+				   unsigned long ro_start,		\
+				   unsigned long ro_limit,		\
+				   unsigned long coh_start,		\
+				   unsigned long coh_limit)		\
+	{								\
+		mmap_add_region(total_base, total_base,			\
+				total_size,				\
+				MT_MEMORY | MT_RW | MT_SECURE);		\
+		mmap_add_region(ro_start, ro_start,			\
+				ro_limit - ro_start,			\
+				MT_MEMORY | MT_RO | MT_SECURE);		\
+		mmap_add_region(coh_start, coh_start,			\
+				coh_limit - coh_start,			\
+				MT_DEVICE | MT_RW | MT_SECURE);		\
+		mmap_add(hi6xxx_mmap);					\
+		init_xlat_tables();					\
+									\
+		enable_mmu_el##_el();					\
+	}
+
+/* Define EL1 and EL3 variants of the function initialising the MMU */
+DEFINE_CONFIGURE_MMU_EL(1)
+DEFINE_CONFIGURE_MMU_EL(3)
+
+/*******************************************************************************
+
+ * A single boot loader stack is expected to work on both the Foundation hi6xxx
+ * models and the two flavours of the Base hi6xxx models (AEMv8 & Cortex). The
+ * SYS_ID register provides a mechanism for detecting the differences between
+ * these platforms. This information is stored in a per-BL array to allow the
+ * code to take the correct path.Per BL platform configuration.
+ ******************************************************************************/
+int hi6xxx_config_setup(void)
+{
+
+	plat_config.gicd_base = BASE_GICD_BASE;
+	plat_config.gicc_base = BASE_GICC_BASE;
+	plat_config.gich_base = BASE_GICH_BASE;
+	plat_config.gicv_base = BASE_GICV_BASE;
+
+
+	plat_config.max_aff0 = 4;
+	plat_config.max_aff1 = 2;
+	plat_config.flags = 0;
+
+      plat_config.flags |= CONFIG_HAS_CCI | CONFIG_CPUECTLR_SMP_BIT;
+
+	return 0;
+}
+
+unsigned long plat_get_ns_image_entrypoint(void)
+{
+	return NS_IMAGE_OFFSET;
+}
+
+uint64_t plat_get_syscnt_freq(void)
+{
+	uint64_t counter_base_frequency;
+
+	/* Read the frequency from Frequency modes table */
+	counter_base_frequency = HI6XXX_SYSCNT_FREQ;
+
+	/* The first entry of the frequency modes table must not be 0 */
+	assert(counter_base_frequency != 0);
+
+	return counter_base_frequency;
+}
+
+void hi6xxx_cci_setup(void)
+{
+	/*
+	 * Enable CCI-400 for this cluster. No need
+	 * for locks as no other cpu is active at the
+	 * moment
+	 */
+	if (plat_config.flags & CONFIG_HAS_CCI)
+	{
+		cci_secure_cfg();
+		cci_enable_coherency(read_mpidr());
+	}
+}
+
+void hi6xxx_gic_init(void)
+{
+	arm_gic_init(plat_config.gicc_base,
+		plat_config.gicd_base,
+		BASE_GICR_BASE,
+		irq_sec_array,
+		num_sec_irqs);
+}
+
+
+/*******************************************************************************
+ * Gets SPSR for BL32 entry
+ ******************************************************************************/
+uint32_t hi6xxx_get_spsr_for_bl32_entry(void)
+{
+	/*
+	 * The Secure Payload Dispatcher service is responsible for
+	 * setting the SPSR prior to entry into the BL32 image.
+	 */
+	return 0;
+}
+
+/*******************************************************************************
+ * Gets SPSR for BL33 entry
+ ******************************************************************************/
+uint32_t hi6xxx_get_spsr_for_bl33_entry(void)
+{
+	unsigned long el_status;
+	unsigned int mode;
+	uint32_t spsr;
+
+	/* Figure out what mode we enter the non-secure world in */
+	el_status = read_id_aa64pfr0_el1() >> ID_AA64PFR0_EL2_SHIFT;
+	el_status &= ID_AA64PFR0_ELX_MASK;
+
+	if (el_status)
+		mode = MODE_EL2;
+	else
+		mode = MODE_EL1;
+
+	/*
+	 * TODO: Consider the possibility of specifying the SPSR in
+	 * the FIP ToC and allowing the platform to have a say as
+	 * well.
+	 */
+	spsr = SPSR_64(mode, MODE_SP_ELX, DISABLE_ALL_EXCEPTIONS);
+	return spsr;
+}
+
+void bl31_plat_enable_mmu(void)
+{
+
+}
+
+void bl32_plat_enable_mmu(void)
+{
+
+}
+

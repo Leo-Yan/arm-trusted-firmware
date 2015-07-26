@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2014-2015, Linaro Ltd and Contributors. All rights reserved.
- * Copyright (c) 2014-2015, Hisilicon Ltd and Contributors. All rights reserved.
+ * Copyright (c) 2013-2014, ARM Limited and Contributors. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -30,24 +29,23 @@
  */
 
 #include <arch.h>
+#include <arch_helpers.h>
 #include <arm_gic.h>
 #include <assert.h>
-#include <bl31.h>
 #include <bl_common.h>
-#include <cci400.h>
+#include <bl31.h>
 #include <console.h>
 #include <mmio.h>
 #include <platform.h>
 #include <stddef.h>
-#include "hikey_def.h"
-#include "hikey_private.h"
 #include <hisi_ipc.h>
 #include "drivers/pwrc/hi6xxx_pwrc.h"
 #include "hisi_def.h"
+#include "hi6xxx_private.h"
 
 /*******************************************************************************
  * Declarations of linker defined symbols which will help us find the layout
- * of trusted RAM
+ * of trusted SRAM
  ******************************************************************************/
 extern unsigned long __RO_START__;
 extern unsigned long __RO_END__;
@@ -74,88 +72,135 @@ extern unsigned long __COHERENT_RAM_END__;
 #define BL31_COHERENT_RAM_BASE (unsigned long)(&__COHERENT_RAM_START__)
 #define BL31_COHERENT_RAM_LIMIT (unsigned long)(&__COHERENT_RAM_END__)
 
-/******************************************************************************
- * Placeholder variables for copying the arguments that have been passed to
- * BL3-1 from BL2.
+
+#if RESET_TO_BL31
+static entry_point_info_t  next_image_ep_info;
+#else
+/*******************************************************************************
+ * Reference to structure which holds the arguments that have been passed to
+ * BL31 from BL2.
  ******************************************************************************/
-static entry_point_info_t bl32_ep_info;
-static entry_point_info_t bl33_ep_info;
+static bl31_params_t *bl2_to_bl31_params;
+#endif
 
 /*******************************************************************************
- * Return a pointer to the 'entry_point_info' structure of the next image for
- * the security state specified. BL3-3 corresponds to the non-secure image type
- * while BL3-2 corresponds to the secure image type. A NULL pointer is returned
+ * Return a pointer to the 'entry_point_info' structure of the next image for the
+ * security state specified. BL33 corresponds to the non-secure image type
+ * while BL32 corresponds to the secure image type. A NULL pointer is returned
  * if the image does not exist.
  ******************************************************************************/
 entry_point_info_t *bl31_plat_get_next_image_ep_info(uint32_t type)
 {
+#if RESET_TO_BL31
+
+	assert(type <= NON_SECURE);
+	SET_PARAM_HEAD(&next_image_ep_info,
+				PARAM_EP,
+				VERSION_1,
+				0);
+
+	SET_SECURITY_STATE(next_image_ep_info.h.attr, type);
+
+	if (type == NON_SECURE) {
+		/*
+		 * Tell BL31 where the non-trusted software image
+		 * is located and the entry state information
+		 */
+		next_image_ep_info.pc = plat_get_ns_image_entrypoint();
+		next_image_ep_info.spsr = hi6xxx_get_spsr_for_bl33_entry();
+	} else {
+		next_image_ep_info.pc = BL32_BASE;
+		next_image_ep_info.spsr = hi6xxx_get_spsr_for_bl32_entry();
+	}
+
+	return &next_image_ep_info;
+#else
 	entry_point_info_t *next_image_info;
 
-	next_image_info = (type == NON_SECURE) ? &bl33_ep_info : &bl32_ep_info;
-
-	/* None of the images on this platform can have 0x0 as the entrypoint */
-	if (next_image_info->pc)
-		return next_image_info;
-	else
-		return NULL;
+	next_image_info = (type == NON_SECURE) ?
+		bl2_to_bl31_params->bl33_ep_info :
+		bl2_to_bl31_params->bl32_ep_info;
+    return next_image_info;
+#endif
 }
 
 /*******************************************************************************
- * Perform any BL3-1 specific platform actions. Here is an opportunity to copy
+ * Perform any BL31 specific platform actions. Here is an opportunity to copy
  * parameters passed by the calling EL (S-EL1 in BL2 & S-EL3 in BL1) before they
  * are lost (potentially). This needs to be done before the MMU is initialized
- * so that the memory layout can be used while creating page tables. Also, BL2
+ * so that the memory layout can be used while creating page tables. On the FVP
+ * we know that BL2 has populated the parameters in secure DRAM. So we just use
+ * the reference passed in 'from_bl2' instead of copying. The 'data' parameter
+ * is not used since all the information is contained in 'from_bl2'. Also, BL2
  * has flushed this information to memory, so we are guaranteed to pick up good
  * data
  ******************************************************************************/
 void bl31_early_platform_setup(bl31_params_t *from_bl2,
-			       void *plat_params_from_bl2)
+				void *plat_params_from_bl2)
 {
 	/* Initialize the console to provide early debug support */
-	console_init(PL011_UART0_BASE, PL011_UART0_CLK_IN_HZ, PL011_BAUDRATE);
+	console_init(PL011_UART0_BASE);
 
-	/*
-	 * Initialise the CCI-400 driver for BL31 so that it is accessible after
-	 * a warm boot. BL1 should have already enabled CCI coherency for this
-	 * cluster during cold boot.
-	 */
-	cci_init(CCI400_BASE,
-		 CCI400_SL_IFACE3_CLUSTER_IX,
-		 CCI400_SL_IFACE4_CLUSTER_IX);
+	/* Initialize the platform config for future decision making */
+	hi6xxx_config_setup();
 
-	/*
-	 * Copy BL3-2 and BL3-3 entry point information.
-	 * They are stored in Secure RAM, in BL2's address space.
+	/* Check params passed from BL2 should not be NULL,
+	 * We are not checking plat_params_from_bl2 as NULL as we are not
+	 * using it on FVP
 	 */
-	bl32_ep_info = *from_bl2->bl32_ep_info;
-	bl33_ep_info = *from_bl2->bl33_ep_info;
+	assert(from_bl2 != NULL);
+	assert(from_bl2->h.type == PARAM_BL31);
+	assert(from_bl2->h.version >= VERSION_1);
+
+	bl2_to_bl31_params = from_bl2;
+	assert(((unsigned long)plat_params_from_bl2) == HI6XXX_BL31_PLAT_PARAM_VAL);
 }
 
 /*******************************************************************************
- * Initialize the GIC.
+ * Initialize the gic, configure the CLCD and zero out variables needed by the
+ * secondaries to boot up correctly.
  ******************************************************************************/
 void bl31_platform_setup(void)
 {
-	/* Initialize the gic cpu and distributor interfaces */
-	plat_gic_init();
-	arm_gic_setup();
 
+	/* Initialize the gic cpu and distributor interfaces */
+	hi6xxx_gic_init();
+	arm_gic_setup();
+      /*TODO: pwrctrl & ipc init*/
 	hisi_ipc_init();
 	hi6xxx_pwrc_setup();
+
+	/* Topologies are best known to the platform. */
+	hi6xxx_setup_topology();
 }
 
 /*******************************************************************************
  * Perform the very early platform specific architectural setup here. At the
  * moment this is only intializes the mmu in a quick and dirty way.
  ******************************************************************************/
-void bl31_plat_arch_setup()
+void bl31_plat_arch_setup(void)
 {
-#if 0	
-	configure_mmu_el3(BL31_RO_BASE,
-			  BL31_COHERENT_RAM_LIMIT - BL31_RO_BASE,
-			  BL31_RO_BASE,
-			  BL31_RO_LIMIT,
-			  BL31_COHERENT_RAM_BASE,
-			  BL31_COHERENT_RAM_LIMIT);
+    unsigned int ectlr = 0;
+
+    unsigned int actlr = 0;
+	hi6xxx_cci_setup();
+
+    ectlr = read_cpuectlr();
+	ectlr |= CPUECTLR_SMP_BIT;
+	write_cpuectlr(ectlr);
+		/* cpuectrl access */
+	actlr = read_actlr_el3();
+#define ACTLR_SCRNS_BIT	(0x1 << 1)
+	actlr |= ACTLR_SCRNS_BIT;
+	write_actlr_el3(actlr);
+
+#if 0
+	hi6xxx_configure_mmu_el3(BL31_RO_BASE,
+			      (BL31_COHERENT_RAM_LIMIT - BL31_RO_BASE),
+			      BL31_RO_BASE,
+			      BL31_RO_LIMIT,
+			      BL31_COHERENT_RAM_BASE,
+			      BL31_COHERENT_RAM_LIMIT);
 #endif
+
 }

@@ -184,6 +184,8 @@ wfi_spill:
 	dsb	sy		// ensure write buffer empty
 	wfi
 
+	b	.
+
 	mrs	x0, mpidr_el1
 	ldr	x10, =psci_mboxes
 	bl	platform_get_core_pos

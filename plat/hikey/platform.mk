@@ -90,7 +90,10 @@ BL31_SOURCES		+=	drivers/arm/cci400/cci400.c		\
 				plat/common/aarch64/platform_mp_stack.S	\
 				plat/hikey/bl31_plat_setup.c		\
 				plat/hikey/drivers/sp804_timer.c	\
-				plat/hikey/plat_pm.c			\
-				plat/hikey/plat_topology.c
+				plat/hikey/hi6xxx_pm.c			\
+				plat/hikey/plat_topology.c		\
+				plat/hikey/hi6xxx_pm_sleep.S		\
+				plat/hikey/drivers/pwrc/hi6xxx_pwrc.c	\
+				plat/hikey/drivers/ipc/hisi_ipc.c
 
 NEED_BL30		:=	yes
