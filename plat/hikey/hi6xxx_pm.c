@@ -541,6 +541,16 @@ static void hikey_affinst_suspend_finish(uint32_t afflvl,
 }
 #endif
 
+unsigned int hi6xxx_get_sys_suspend_power_state(void)
+{
+	unsigned int power_state;
+
+	power_state = psci_make_powerstate(0x3,
+			PSTATE_TYPE_POWERDOWN, MPIDR_AFFLVL1);
+
+	return power_state;
+}
+
 /*******************************************************************************
  * Export the platform handlers to enable psci to invoke them
  ******************************************************************************/
@@ -553,6 +563,7 @@ static const plat_pm_ops_t hi6xxx_plat_pm_ops = {
 	.affinst_suspend_finish	= hi6xxx_affinst_suspend_finish,
 	.system_off		= NULL,
 	.system_reset		= NULL,
+	.get_sys_suspend_power_state = hi6xxx_get_sys_suspend_power_state,
 };
 
 /*******************************************************************************
