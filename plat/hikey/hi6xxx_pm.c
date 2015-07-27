@@ -33,6 +33,7 @@
 #include <assert.h>
 #include <bakery_lock.h>
 #include <cci400.h>
+#include <errno.h>
 #include <mmio.h>
 #include <platform.h>
 #include <plat_config.h>
@@ -93,19 +94,19 @@ int hi6xxx_affinst_on(unsigned long mpidr,
 	int rc = PSCI_E_SUCCESS;
 	unsigned int core = mpidr & MPIDR_CPU_MASK;
 	unsigned int cluster = (mpidr & MPIDR_CLUSTER_MASK) >> MPIDR_AFFINITY_BITS;
-	//unsigned long linear_id;
-	//int cpu;
 
-	//linear_id = platform_get_core_pos(mpidr);
-	//cpu = mpidr & MPIDR_CPU_MASK;
+	printf("%s: %x %x %x %x %x %x %x %x\n", __func__,
+		mmio_read_32(ACPU_SC_CPUx_PW_ISO_STAT(0)),
+		mmio_read_32(ACPU_SC_CPUx_PW_ISO_STAT(1)),
+		mmio_read_32(ACPU_SC_CPUx_PW_ISO_STAT(2)),
+		mmio_read_32(ACPU_SC_CPUx_PW_ISO_STAT(3)),
+		mmio_read_32(ACPU_SC_CPUx_PW_ISO_STAT(4)),
+		mmio_read_32(ACPU_SC_CPUx_PW_ISO_STAT(5)),
+		mmio_read_32(ACPU_SC_CPUx_PW_ISO_STAT(6)),
+		mmio_read_32(ACPU_SC_CPUx_PW_ISO_STAT(7)));
 
 	switch (afflvl) {
 	case MPIDR_AFFLVL1:
-		//if (!cluster_flag[cluster]) {
-		//	hikey_power_on_cluster(cluster);
-		//	cluster_flag[cluster] = 1;
-		//}
-
 		if (state == PSCI_STATE_OFF) {
 			if(hisi_cluster_is_idle(cluster))
 				hisi_powerup_cluster(cluster, core);
@@ -113,18 +114,6 @@ int hi6xxx_affinst_on(unsigned long mpidr,
 		break;
 
 	case MPIDR_AFFLVL0:
-
-		//if (!cpu_flag[linear_id]) {
-		//	psci_program_mailbox(mpidr, sec_entrypoint);
-
-		//	/* Setup cpu entrypoint when it next powers up */
-		//	mmio_write_32(ACPU_SC_CPUx_RVBARADDR(linear_id),
-		//		      (unsigned int)(sec_entrypoint >> 2));
-
-		//	hikey_power_on_cpu(cluster, cpu, linear_id);
-		//	cpu_flag[linear_id] = 1;
-		//} else {
-
 		hisi_set_cpu_boot_flag(cluster, core);
 		set_core_power_on_addr(cluster, core, sec_entrypoint);
 		hisi_powerup_core(cluster, core);
@@ -236,17 +225,17 @@ static void hi6xxx_affinst_off(unsigned int afflvl, unsigned int state)
  * dealt with. So do not write & read global variables across calls. It will be
  * wise to do flush a write to the global to prevent unpredictable results.
  ******************************************************************************/
-int hi6xxx_affinst_suspend(unsigned long mpidr,
-			unsigned long sec_entrypoint,
-			unsigned long ns_entrypoint,
-			unsigned int afflvl,
-			unsigned int state)
+void hi6xxx_affinst_suspend(unsigned long sec_entrypoint,
+			       unsigned int afflvl,
+			       unsigned int state)
 {
-	int rc = PSCI_E_SUCCESS;
+	//int rc = PSCI_E_SUCCESS;
 	//unsigned int ectlr;
+	unsigned int mpidr = read_mpidr_el1();
 	unsigned int core = mpidr & MPIDR_CPU_MASK;
 	unsigned int cluster = (mpidr & MPIDR_CLUSTER_MASK) >> MPIDR_AFFINITY_BITS;
 
+	//printf("%s: enter\n", __func__);
 	switch (afflvl) {
 	case MPIDR_AFFLVL1:
 		hisi_set_cpuidle_flag(cluster, core, 2);
@@ -306,6 +295,8 @@ int hi6xxx_affinst_suspend(unsigned long mpidr,
 			 * cpu off and enable wakeup interrupts.
 			 */
 			hisi_enter_core_idle(cluster, core);
+
+			psci_program_mailbox(mpidr, sec_entrypoint);
 		}
 		break;
 
@@ -313,7 +304,7 @@ int hi6xxx_affinst_suspend(unsigned long mpidr,
 		assert(0);
 	}
 
-	return rc;
+	return;
 }
 
 void hikey_affinst_on_finish(uint32_t afflvl, uint32_t state)
@@ -422,6 +413,7 @@ void hi6xxx_affinst_on_finish(unsigned int afflvl, unsigned int state)
 		/* TODO: This setup is needed only after a cold boot */
 		arm_gic_pcpu_distif_setup();
 
+		psci_program_mailbox(mpidr, 0x0);
 		break;
 
 	default:
@@ -438,21 +430,116 @@ void hi6xxx_affinst_on_finish(unsigned int afflvl, unsigned int state)
  * TODO: At the moment we reuse the on finisher and reinitialize the secure
  * context. Need to implement a separate suspend finisher.
  ******************************************************************************/
-#if 0
-int hi6xxx_affinst_suspend_finish(unsigned long mpidr,
-			       unsigned int afflvl,
-			       unsigned int state)
+void hi6xxx_affinst_suspend_finish(unsigned int afflvl,
+				      unsigned int state)
 {
+	unsigned int mpidr = read_mpidr_el1();
 	unsigned int core = mpidr & MPIDR_CPU_MASK;
 	unsigned int cluster = (mpidr & MPIDR_CLUSTER_MASK) >> MPIDR_AFFINITY_BITS;
+
+	//printf("%s: enter %x %x\n", __func__,
+	//	mpidr, mmio_read_32(ACPU_SC_CPUx_PW_ISO_STAT(7)));
 
 	if(MPIDR_AFFLVL0 == afflvl)
 		hisi_clear_cpuidle_flag(cluster, core);
 
-	return hi6xxx_affinst_on_finish(mpidr, afflvl, state);
+	hi6xxx_affinst_on_finish(afflvl, state);
+
+	return;
+}
+
+#if 0
+static int32_t hikey_do_plat_actions(uint32_t afflvl, uint32_t state)
+{
+	uint32_t max_phys_off_afflvl;
+
+	assert(afflvl <= MPIDR_AFFLVL1);
+
+	if (state != PSCI_STATE_OFF)
+		return -EAGAIN;
+
+	/*
+	 * Find the highest affinity level which will be suspended and postpone
+	 * all the platform specific actions until that level is hit.
+	 */
+	max_phys_off_afflvl = psci_get_max_phys_off_afflvl();
+	assert(max_phys_off_afflvl != PSCI_INVALID_DATA);
+	assert(psci_get_suspend_afflvl() >= max_phys_off_afflvl);
+	if (afflvl != max_phys_off_afflvl)
+		return -EAGAIN;
+
+	return 0;
+}
+
+static void hikey_affinst_suspend(uint64_t sec_entrypoint,
+				  uint32_t afflvl,
+				  uint32_t state)
+{
+	unsigned long mpidr = read_mpidr_el1();
+	unsigned int core = mpidr & MPIDR_CPU_MASK;
+	//unsigned long linear_id;
+	unsigned int cluster;
+
+	/* Get the mpidr for this cpu */
+	//linear_id = platform_get_core_pos(mpidr);
+	cluster = (mpidr & MPIDR_CLUSTER_MASK) >> MPIDR_AFFINITY_BITS;
+
+	/* Determine if any platform actions need to be executed */
+	if (hikey_do_plat_actions(afflvl, state) == -EAGAIN)
+		return;
+
+	/*
+	 * Prevent interrupts from spuriously waking up
+	 * this cpu
+	 */
+	arm_gic_cpuif_deactivate();
+
+	/* Program the jump address for the target cpu */
+	set_core_power_on_addr(cluster, core, sec_entrypoint);
+
+	hisi_set_cpuidle_flag(cluster, core, 0);
+	/*
+	 * Program the power controller to power this
+	 * cpu off and enable wakeup interrupts.
+	 */
+	hisi_enter_core_idle(cluster, core);
+
+	psci_program_mailbox(mpidr, sec_entrypoint);
+
+	/* Cluster is to be turned off, so disable coherency */
+	if (afflvl > MPIDR_AFFLVL0)
+		cci_disable_cluster_coherency(mpidr);
+}
+
+static void hikey_affinst_suspend_finish(uint32_t afflvl,
+					 uint32_t state)
+{
+	unsigned long mpidr = read_mpidr_el1();
+	unsigned int core = mpidr & MPIDR_CPU_MASK;
+	//unsigned long linear_id;
+	unsigned int cluster;
+
+	/* Get the mpidr for this cpu */
+	//linear_id = platform_get_core_pos(mpidr);
+	cluster = (mpidr & MPIDR_CLUSTER_MASK) >> MPIDR_AFFINITY_BITS;
+
+	if (afflvl != MPIDR_AFFLVL0)
+		cci_enable_cluster_coherency(mpidr);
+
+	if (afflvl == MPIDR_AFFLVL0)
+		hisi_clear_cpuidle_flag(cluster, core);
+
+	clear_core_power_on_addr(cluster, core);
+
+	/* Enable the gic cpu interface */
+	arm_gic_cpuif_setup();
+
+	/* TODO: This setup is needed only after a cold boot */
+	arm_gic_pcpu_distif_setup();
+
+	psci_program_mailbox(mpidr, 0x0);
 }
 #endif
-
 
 /*******************************************************************************
  * Export the platform handlers to enable psci to invoke them
@@ -462,8 +549,8 @@ static const plat_pm_ops_t hi6xxx_plat_pm_ops = {
 	.affinst_on_finish	= hi6xxx_affinst_on_finish,
 	.affinst_off		= hi6xxx_affinst_off,
 	.affinst_standby	= NULL,
-	.affinst_suspend	= NULL,
-	.affinst_suspend_finish	= NULL,
+	.affinst_suspend	= hi6xxx_affinst_suspend,
+	.affinst_suspend_finish	= hi6xxx_affinst_suspend_finish,
 	.system_off		= NULL,
 	.system_reset		= NULL,
 };

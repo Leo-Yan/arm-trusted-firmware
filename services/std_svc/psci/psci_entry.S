@@ -167,6 +167,12 @@ psci_aff_common_finish_entry:
 	 * --------------------------------------------
 	 */
 func psci_power_down_wfi
+
+        dsb     sy              // ensure write buffer empty
+	wfi
+wfi_spill_1:
+	b       wfi_spill_1
+
 	mrs	x2, scr_el3
 	orr	x2, x2, #(SCR_IRQ_BIT | SCR_FIQ_BIT)	// Enable IRQ
 	msr	scr_el3, x2
