@@ -150,12 +150,10 @@ void bl31_platform_setup(void)
  ******************************************************************************/
 void bl31_plat_arch_setup()
 {
-#if 0	
 	configure_mmu_el3(BL31_RO_BASE,
 			  BL31_COHERENT_RAM_LIMIT - BL31_RO_BASE,
 			  BL31_RO_BASE,
 			  BL31_RO_LIMIT,
 			  BL31_COHERENT_RAM_BASE,
 			  BL31_COHERENT_RAM_LIMIT);
-#endif
 }

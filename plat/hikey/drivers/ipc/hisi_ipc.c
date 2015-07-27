@@ -93,8 +93,6 @@ static void hisi_ipc_send(unsigned int ipc_num)
         return;
     }
 
-    printf("%s: %x %d\n", __func__, g_ipc_base_addr, ipc_num);
-
     reg = BIT(ipc_num);
     writel(reg, g_ipc_base_addr);
 }

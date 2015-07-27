@@ -106,10 +106,10 @@ int hi6xxx_affinst_on(unsigned long mpidr,
 		//	cluster_flag[cluster] = 1;
 		//}
 
-		//if (state == PSCI_STATE_OFF) {
-			//if(hisi_cluster_is_idle(cluster))
+		if (state == PSCI_STATE_OFF) {
+			if(hisi_cluster_is_idle(cluster))
 				hisi_powerup_cluster(cluster, core);
-		//}
+		}
 		break;
 
 	case MPIDR_AFFLVL0:
@@ -124,18 +124,6 @@ int hi6xxx_affinst_on(unsigned long mpidr,
 		//	hikey_power_on_cpu(cluster, cpu, linear_id);
 		//	cpu_flag[linear_id] = 1;
 		//} else {
-
-		printf("cpu stat %x %x %x %x\n",
-			mmio_read_32(ACPU_SC_CPUx_PW_ISO_STAT(0)),
-			mmio_read_32(ACPU_SC_CPUx_PW_ISO_STAT(1)),
-			mmio_read_32(ACPU_SC_CPUx_PW_ISO_STAT(2)),
-			mmio_read_32(ACPU_SC_CPUx_PW_ISO_STAT(3)));
-
-		printf("cpu reset %x %x %x %x\n",
-			mmio_read_32(ACPU_SC_CPUx_RSTDIS(0)),
-			mmio_read_32(ACPU_SC_CPUx_RSTDIS(1)),
-			mmio_read_32(ACPU_SC_CPUx_RSTDIS(2)),
-			mmio_read_32(ACPU_SC_CPUx_RSTDIS(3)));
 
 		hisi_set_cpu_boot_flag(cluster, core);
 		set_core_power_on_addr(cluster, core, sec_entrypoint);
@@ -373,6 +361,9 @@ void hi6xxx_affinst_on_finish(unsigned int afflvl, unsigned int state)
 	//unsigned long linear_id;
 
 	//linear_id = platform_get_core_pos(mpidr);
+
+	if (afflvl != MPIDR_AFFLVL0)
+		cci_enable_cluster_coherency(mpidr);
 
 	switch (afflvl) {
 
