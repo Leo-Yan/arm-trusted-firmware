@@ -95,6 +95,7 @@ int hi6xxx_affinst_on(unsigned long mpidr,
 	unsigned int core = mpidr & MPIDR_CPU_MASK;
 	unsigned int cluster = (mpidr & MPIDR_CLUSTER_MASK) >> MPIDR_AFFINITY_BITS;
 
+#if 0
 	printf("%s: %x %x %x %x %x %x %x %x\n", __func__,
 		mmio_read_32(ACPU_SC_CPUx_PW_ISO_STAT(0)),
 		mmio_read_32(ACPU_SC_CPUx_PW_ISO_STAT(1)),
@@ -104,6 +105,7 @@ int hi6xxx_affinst_on(unsigned long mpidr,
 		mmio_read_32(ACPU_SC_CPUx_PW_ISO_STAT(5)),
 		mmio_read_32(ACPU_SC_CPUx_PW_ISO_STAT(6)),
 		mmio_read_32(ACPU_SC_CPUx_PW_ISO_STAT(7)));
+#endif
 
 	switch (afflvl) {
 	case MPIDR_AFFLVL1:
@@ -258,7 +260,16 @@ void hi6xxx_affinst_suspend(unsigned long sec_entrypoint,
 			 * Program the power controller to turn the
 			 * cluster off
 			 */
-			hisi_enter_cluster_idle(cluster, core);
+			//if (hisi_is_acpu_subsys_powerdown()) {
+			if (psci_get_suspend_stateid() == 0xd) {
+				//printf("enter suspend\n");
+				hisi_set_cluster_wfi(1);
+				hisi_set_cluster_wfi(0);
+				hisi_enter_ap_suspend(cluster, core);
+			} else {
+				hisi_enter_core_idle(cluster, core);
+				hisi_enter_cluster_idle(cluster, core);
+			}
 
 
 		}
@@ -296,7 +307,9 @@ void hi6xxx_affinst_suspend(unsigned long sec_entrypoint,
 			 */
 			hisi_enter_core_idle(cluster, core);
 
-			psci_program_mailbox(mpidr, sec_entrypoint);
+			if (psci_get_suspend_stateid() != 0xd &&
+			    psci_get_suspend_afflvl() == MPIDR_AFFLVL0)
+				hisi_enter_core_idle(cluster, core);
 		}
 		break;
 
@@ -335,6 +348,8 @@ void hikey_affinst_on_finish(uint32_t afflvl, uint32_t state)
 	arm_gic_pcpu_distif_setup();
 }
 
+extern void plat_gic_init(void);
+
 /*******************************************************************************
  * FVP handler called when an affinity instance has just been powered on after
  * being turned off earlier. The level and mpidr determine the affinity
@@ -363,7 +378,7 @@ void hi6xxx_affinst_on_finish(unsigned int afflvl, unsigned int state)
 		if (state == PSCI_STATE_OFF) {
 
 
-#if 0 /*acpu sr,need the code as follows*/
+#if 1 /*acpu sr,need the code as follows*/
 			coherent_init();
 			coherent_slave_port_config();
 			__asm__ volatile ("isb");
@@ -407,11 +422,18 @@ void hi6xxx_affinst_on_finish(unsigned int afflvl, unsigned int state)
 		/* Zero the jump address in the mailbox for this cpu */
 		clear_core_power_on_addr(cluster, core);
 
-		/* Enable the gic cpu interface */
-		arm_gic_cpuif_setup();
+		if (psci_get_suspend_stateid() == 0xd) {
+			printf("resume back\n");
+			//plat_gic_init();
+			arm_gic_setup();
+		} else {
 
-		/* TODO: This setup is needed only after a cold boot */
-		arm_gic_pcpu_distif_setup();
+			/* Enable the gic cpu interface */
+			arm_gic_cpuif_setup();
+
+			/* TODO: This setup is needed only after a cold boot */
+			arm_gic_pcpu_distif_setup();
+		}
 
 		psci_program_mailbox(mpidr, 0x0);
 		break;
@@ -545,7 +567,7 @@ unsigned int hi6xxx_get_sys_suspend_power_state(void)
 {
 	unsigned int power_state;
 
-	power_state = psci_make_powerstate(0x3,
+	power_state = psci_make_powerstate(0xD,
 			PSTATE_TYPE_POWERDOWN, MPIDR_AFFLVL1);
 
 	return power_state;
